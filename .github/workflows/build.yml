@@ -74,13 +74,18 @@ jobs:
             ${IMAGE_NAME} \
             ${DEFAULT_TAG}
 
-      # This is optional, this provides smaller delta updates
-      - name: Rechunk with rpm-ostree
-        id: rechunk
-        run: |
-          sudo -E $(command -v just) ostree-rechunk \
-            ${IMAGE_NAME} \
-            ${DEFAULT_TAG}
+      # This is optional, this provides smaller delta updates.
+      # DEAKTIVIERT (2026-07-14): Step schlug auf dem GitHub-Runner fehl
+      # (Run 29316025788, Build selbst gruen). bluefin-dx-Basis ist upstream
+      # bereits gerechunkt, unsere Zusatzschicht ist ein einzelner duenner
+      # Layer — Nutzen minimal. mooncenters-bluefin-dx (produktiv) laeuft
+      # ebenfalls ohne Rechunk-Step.
+      # - name: Rechunk with rpm-ostree
+      #   id: rechunk
+      #   run: |
+      #     sudo -E $(command -v just) ostree-rechunk \
+      #       ${IMAGE_NAME} \
+      #       ${DEFAULT_TAG}
 
       # If you are feeling adventurous, use the new distro agnostic rechunker
       # https://github.com/coreos/chunkah
