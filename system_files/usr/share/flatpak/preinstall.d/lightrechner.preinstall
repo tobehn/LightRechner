@@ -1,0 +1,9 @@
+# Deklarative Flatpaks fuer den Leitrechner. flatpak-preinstall.service
+# installiert sie beim ersten Boot mit Netzverbindung (Fedora 44 Mechanismus).
+# ACHTUNG: Eine Sektion hier zu ENTFERNEN deinstalliert die App auf allen
+# Systemen, die dieses Image fahren (preinstall-Semantik).
+
+# Dashboard-Kiosk-Browser (ControlRoom); Autostart richtet lightrechner-setup ein.
+[Flatpak Preinstall org.chromium.Chromium]
+Branch=stable
+IsRuntime=false

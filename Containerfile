@@ -4,7 +4,16 @@ COPY build_files /
 COPY system_files /system_files
 
 # Base Image
-FROM ghcr.io/ublue-os/bluefin:stable
+#
+# bluefin-dx (nicht bluefin): Der Leitrechner-Workload (mosquitto, omio-pha,
+# ControlRoom) laeuft auf Docker Compose — Docker ist nur in der DX-Variante
+# enthalten (bluefin:stable verifiziert 2026-07-14: kein docker/moby im
+# rechunk-Package-Label). Die Bluefin-2026-Roadmap will den dx-Bedarf
+# perspektivisch aufloesen; sollte bluefin-dx eingestellt werden, Fallback:
+# FROM ghcr.io/ublue-os/bluefin:stable + Docker-Layering in build.sh
+# (dnf5 install moby-engine docker-compose o. docker-ce aus dem Docker-Repo).
+# Plan: ai-vault/plans/2026-07-14-lightrechner-bootc-image-fuer-leitrechner-bluefin.md
+FROM ghcr.io/ublue-os/bluefin-dx:stable
 ## Other possible base images include:
 # FROM ghcr.io/ublue-os/bazzite:testing
 # FROM ghcr.io/ublue-os/aurora:stable

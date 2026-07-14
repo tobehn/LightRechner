@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CONF=/etc/reboot-schedule.conf
+TIMER=nightly-reboot.timer
+DROPIN_DIR=/etc/systemd/system/${TIMER}.d
+DROPIN=${DROPIN_DIR}/schedule.conf
+
+usage() {
+cat <<USG
+reboot-schedule – geplanter Auto-Reboot (wendet gestagte bootc-Updates an)
+
+  reboot-schedule status        Zustand, Intervall, Uhrzeit, nächster Reboot
+  reboot-schedule on            Zeitplan aktivieren
+  reboot-schedule off           Zeitplan deaktivieren
+  reboot-schedule daily         Jede Nacht rebooten
+  reboot-schedule every <N>     Alle N Tage rebooten (z.B. 5, 7, 30)
+  reboot-schedule at <HH:MM>    Uhrzeit ändern (Default 23:59)
+USG
+}
+
+require_root() { [ "$(id -u)" -eq 0 ] || exec sudo -- "$0" "$@"; }
+
+read_interval() {
+    local INTERVAL_DAYS=1
+    [ -r "$CONF" ] && . "$CONF"
+    printf '%s' "${INTERVAL_DAYS:-1}"
+}
+read_time() {
+    local t
+    t=$(systemctl cat "$TIMER" 2>/dev/null | awk -F= '/^OnCalendar=./{v=$2} END{print v}')
+    printf '%s' "${t:-*-*-* 23:59:59}"
+}
+
+case "${1:-status}" in
+  status)
+    echo "Zeitplan:  $(systemctl is-enabled "$TIMER" 2>/dev/null || true) / $(systemctl is-active "$TIMER" 2>/dev/null || true)"
+    echo "Intervall: alle $(read_interval) Tag(e)"
+    echo "Uhrzeit:   $(read_time)"
+    systemctl list-timers "$TIMER" --no-pager 2>/dev/null | sed -n '1,2p' || true
+    ;;
+  on)
+    require_root "$@"
+    systemctl enable --now "$TIMER"
+    echo "Auto-Reboot aktiviert (alle $(read_interval) Tag(e))."
+    ;;
+  off)
+    require_root "$@"
+    systemctl disable --now "$TIMER"
+    echo "Auto-Reboot deaktiviert."
+    ;;
+  daily)
+    require_root "$@"
+    printf 'INTERVAL_DAYS=1\n' > "$CONF"
+    echo "Intervall: jede Nacht."
+    ;;
+  every)
+    require_root "$@"
+    n=${2:-}
+    case "$n" in ''|*[!0-9]*) echo "Fehler: 'every <N>' braucht eine Zahl >=1." >&2; exit 1 ;; esac
+    [ "$n" -lt 1 ] && { echo "Fehler: N muss >=1 sein." >&2; exit 1; }
+    printf 'INTERVAL_DAYS=%s\n' "$n" > "$CONF"
+    echo "Intervall: alle $n Tag(e)."
+    ;;
+  at)
+    require_root "$@"
+    hhmm=${2:-}
+    case "$hhmm" in
+      [0-2][0-9]:[0-5][0-9]) : ;;
+      *) echo "Fehler: 'at <HH:MM>', z.B. at 03:00" >&2; exit 1 ;;
+    esac
+    mkdir -p "$DROPIN_DIR"
+    # leeres OnCalendar= setzt den Basiswert zurück, danach unser Wert
+    printf '[Timer]\nOnCalendar=\nOnCalendar=*-*-* %s:00\n' "$hhmm" > "$DROPIN"
+    systemctl daemon-reload
+    echo "Uhrzeit gesetzt: $hhmm."
+    systemctl list-timers "$TIMER" --no-pager 2>/dev/null | sed -n '2p' || true
+    ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

@@ -1,4 +1,54 @@
-# image-template
+# LightRechner
+
+Standard-OS-Image für alle **Leitrechner** nach dem ControlRoom-Konzept (MQTT Sparkplug B,
+Docker-Compose-Workload, Operator-Kiosk). [bootc](https://github.com/bootc-dev/bootc)-Image
+auf Basis `ghcr.io/ublue-os/bluefin-dx:stable`, gebaut aus dem
+[ublue image-template](https://github.com/ublue-os/image-template) (Original-Anleitung weiter unten).
+
+## Konzept: Dreiteilung
+
+| Ebene | Artefakt | Update-Weg |
+|---|---|---|
+| **Image** (dieses Repo) | OS, Daemons, Desktop-Defaults, RustDesk | Commit → CI → `bootc upgrade` (Rollback: `bootc rollback`) |
+| **Provisioning** | Site-Identität: Hostname, Operator, Tailnet, Secrets | `lightrechner-setup` (im Image enthalten, einmalig pro Site) |
+| **Workload** | ControlRoom-Compose-Stack | IaC-Repo der Site (z.B. scada-uhv21-leitrechner) |
+
+Secrets sind **nie** Teil des Images (public GHCR).
+
+## Was das Image mitbringt
+
+- `docker.service` + `tailscaled` + `rustdesk.service` enabled — **inkl. Preset-Datei**
+  (`20-lightrechner.preset`), sonst kassiert die Atomic-Preset-Neuberechnung den
+  enable-Zustand beim Boot wieder ein
+- **RustDesk nativ** (Version-Pin + SHA256-Check) für unattended Fernzugriff
+  (Kunden-Aufschaltung + Maintenance); `gnome-remote-desktop` ist bewusst **maskiert**
+  (Session-Roulette-Fix — RustDesk ist der GUI-Weg, Tailscale SSH der Terminal-Notfall)
+- 24/7-Betrieb: Sleep-Targets maskiert, GDM-/Session-Suspend aus, Bildschirm bleibt an,
+  Hardware-Watchdog (60s) + Panic-Auto-Reboot
+- `reboot-schedule`-CLI für geplante Update-Reboots (**Opt-in**: `reboot-schedule on`,
+  Intervall z.B. `every 7`, Uhrzeit `at 03:00`)
+- Chromium als deklaratives Flatpak (Kiosk-Browser, installiert beim ersten Boot mit Netz)
+
+## Neuen Leitrechner aufsetzen
+
+```bash
+# 1) Bluefin/ISO installieren (oder bestehendes bootc-System) und wechseln:
+sudo bootc switch ghcr.io/tobehn/lightrechner:latest && sudo systemctl reboot
+
+# 2) Site-Provisioning (idempotent):
+sudo lightrechner-setup --user <operator> \
+    --login-server https://<headscale> --dashboard http://<controlroom-url>
+
+# 3) Manuelle Einmal-Schritte laut Skript-Ausgabe (Keyring, RustDesk-Freigabe),
+#    dann Workload aus dem Site-IaC-Repo deployen und Reboot-Drill fahren.
+```
+
+**RustDesk-Update** = Version-Bump von `RUSTDESK_VERSION`/`RUSTDESK_SHA256` in
+`build_files/build.sh` — läuft mit dem nächsten Update-Reboot ein.
+
+---
+
+# image-template (Original-Dokumentation)
 
 This repository is meant to be a template for building your own custom [bootc](https://github.com/bootc-dev/bootc) image. This template is the recommended way to make customizations to any image published by the Universal Blue Project.
 
@@ -102,11 +152,12 @@ This will show you all the info you need to know about your current image. The i
 
 ### Step 2c: Changing Names
 
-Change the `IMAGE_NAME` and `REPO_ORGANIZATION` variable inside the `image-template.env`
+Change the `IMAGE_NAME` and `REPO_ORGANIZATION` variable inside the `image-metadata.conf`
+(in this repo renamed from the template's `image-template.env` — it holds public metadata, no secrets)
 
 To commit and push all the files changed and added in step 2 into your Github repository:
 ```bash
-git add Containerfile image-template.env cosign.pub
+git add Containerfile image-metadata.conf cosign.pub
 git commit -m "Initial Setup"
 git push
 ```
@@ -173,9 +224,9 @@ To use it, you must have installed [just](https://just.systems/man/en/introducti
 
 ## Environment Variables
 
-These are all sourced from the `image-template.env` file.
+These are all sourced from the `image-metadata.conf` file.
 
-- `image_name`: The name of the image (default: "image-template").
+- `image_name`: The name of the image (default: "lightrechner").
 - `default_tag`: The default tag for the image (default: "latest").
 - `bib_image`: The Bootc Image Builder (BIB) image (default: "quay.io/centos-bootc/bootc-image-builder:latest").
 

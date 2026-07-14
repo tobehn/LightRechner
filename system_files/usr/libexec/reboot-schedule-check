@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CONF=/etc/reboot-schedule.conf
+STAMP=/var/lib/reboot-schedule/last-reboot
+
+INTERVAL_DAYS=1
+[ -r "$CONF" ] && . "$CONF"
+case "${INTERVAL_DAYS:-}" in ''|*[!0-9]*) INTERVAL_DAYS=1 ;; esac
+[ "$INTERVAL_DAYS" -lt 1 ] && INTERVAL_DAYS=1
+
+today=$(( $(date +%s) / 86400 ))   # Tage seit Epoch
+mkdir -p "$(dirname "$STAMP")"
+last=$(cat "$STAMP" 2>/dev/null || echo 0)
+case "$last" in ''|*[!0-9]*) last=0 ;; esac
+
+if [ "$last" -eq 0 ] || [ $(( today - last )) -ge "$INTERVAL_DAYS" ]; then
+    echo "$today" > "$STAMP"
+    logger -t reboot-schedule "Intervall erreicht (${INTERVAL_DAYS}d) -> Reboot"
+    exec systemctl reboot
+fi
+logger -t reboot-schedule "Noch nicht fällig ($(( today - last ))/${INTERVAL_DAYS}d) -> übersprungen"

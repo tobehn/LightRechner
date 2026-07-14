@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# LightRechner Onboarding — per-Site-Schritte, die NICHT ins Image bakebar sind.
+#
+# Das Image erledigt bereits: docker/tailscaled/rustdesk enabled (+ Preset),
+# gnome-remote-desktop + Sleep-Targets maskiert, Watchdog/Panic-Reboot,
+# Chromium-Flatpak-Preinstall, dconf-Leitwarte-Defaults, reboot-schedule (Opt-in).
+#
+# Hier passiert nur Site-Identitaet + User-State:
+#   1. Tailnet-Join (Headscale-Login-Server)
+#   2. GDM Auto-Login (beide Stellen: gdm/custom.conf + AccountsService)
+#   3. Operator in docker-Gruppe
+#   4. Dashboard-Kiosk-Autostart (wait-for-ready + Chromium)
+#   5. Manuell-Block: Keyring, RustDesk-Identitaet/Erstfreigabe
+#   6. Reboot-Drill-Checkliste
+#
+# Idempotent — darf mehrfach laufen. Keine Secrets als Argumente/Output.
+# Quelle: Vault-Pattern 2026-05-21-bluefin-operator-workstation-bootstrap-sequence
+#         + 2026-07-13-rustdesk-unattended-gnome-wayland-service-mode
+set -euo pipefail
+
+OPERATOR_USER="${OPERATOR_USER:-}"
+TAILSCALE_LOGIN_SERVER="${TAILSCALE_LOGIN_SERVER:-}"
+DASHBOARD_URL="${DASHBOARD_URL:-}"
+
+usage() {
+cat <<USG
+lightrechner-setup – Leitrechner-Onboarding (per-Site, idempotent)
+
+  sudo lightrechner-setup --user <operator> [--login-server <url>] [--dashboard <url>]
+
+  --user <name>          Operator-User (muss existieren) – Auto-Login, docker-Gruppe, Kiosk
+  --login-server <url>   Headscale-Coordinator fuer 'tailscale up' (weglassen = Schritt skip)
+  --dashboard <url>      ControlRoom-URL fuer den Chromium-Kiosk (weglassen = Schritt skip)
+
+  Alternativ per ENV: OPERATOR_USER, TAILSCALE_LOGIN_SERVER, DASHBOARD_URL
+USG
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user)         OPERATOR_USER=${2:-}; shift 2 ;;
+    --login-server) TAILSCALE_LOGIN_SERVER=${2:-}; shift 2 ;;
+    --dashboard)    DASHBOARD_URL=${2:-}; shift 2 ;;
+    -h|--help)      usage; exit 0 ;;
+    *) usage >&2; exit 1 ;;
+  esac
+done
+
+[ "$(id -u)" -eq 0 ] || { echo "Bitte mit sudo/als root ausfuehren." >&2; exit 1; }
+[ -n "$OPERATOR_USER" ] || { usage >&2; echo; echo "Fehler: --user fehlt." >&2; exit 1; }
+id "$OPERATOR_USER" >/dev/null 2>&1 || { echo "Fehler: User '$OPERATOR_USER' existiert nicht." >&2; exit 1; }
+
+OPERATOR_HOME=$(getent passwd "$OPERATOR_USER" | cut -d: -f6)
+
+# ─────────────────────────────────────────────────────────────────
+# 1. Tailnet-Join (idempotent — bricht nicht ab, wenn schon up)
+# ─────────────────────────────────────────────────────────────────
+if [ -n "$TAILSCALE_LOGIN_SERVER" ]; then
+    tailscale up --login-server="$TAILSCALE_LOGIN_SERVER" --accept-routes \
+        --hostname="$(hostname)" || true
+    echo "[1/6] tailscaled: $(tailscale status --peers=false 2>/dev/null | head -1 || echo 'noch nicht verbunden — Auth-URL oben beachten')"
+else
+    echo "[1/6] Tailnet-Join uebersprungen (--login-server nicht gesetzt)"
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# 2. GDM Auto-Login (beide Stellen!)
+# ─────────────────────────────────────────────────────────────────
+if ! grep -q "^AutomaticLoginEnable=True" /etc/gdm/custom.conf 2>/dev/null; then
+    tee -a /etc/gdm/custom.conf >/dev/null <<EOF
+
+[daemon]
+AutomaticLoginEnable=True
+AutomaticLogin=${OPERATOR_USER}
+EOF
+fi
+mkdir -p /var/lib/AccountsService/users
+tee /var/lib/AccountsService/users/"$OPERATOR_USER" >/dev/null <<EOF
+[User]
+Session=gnome
+SystemAccount=false
+AutomaticLogin=true
+EOF
+echo "[2/6] Auto-Login: an fuer ${OPERATOR_USER}"
+
+# ─────────────────────────────────────────────────────────────────
+# 3. Operator in docker-Gruppe (Compose-Stack ohne sudo)
+# ─────────────────────────────────────────────────────────────────
+usermod -aG docker "$OPERATOR_USER"
+echo "[3/6] docker-Gruppe: $(id -nG "$OPERATOR_USER" | tr ' ' '\n' | grep -x docker || echo FEHLT)"
+
+# ─────────────────────────────────────────────────────────────────
+# 4. Dashboard-Kiosk (wait-for-ready-Wrapper + Autostart)
+# ─────────────────────────────────────────────────────────────────
+if [ -n "$DASHBOARD_URL" ]; then
+    install -d -o "$OPERATOR_USER" -g "$OPERATOR_USER" \
+        "$OPERATOR_HOME/.local/bin" "$OPERATOR_HOME/.config/autostart"
+    cat > "$OPERATOR_HOME/.local/bin/dashboard-kiosk.sh" <<EOF
+#!/bin/bash
+# Wartet auf Dashboard-Ready (Compose-Stack braucht nach Boot etwas), dann Kiosk.
+for i in \$(seq 1 150); do
+  if curl -sf -o /dev/null --max-time 2 "$DASHBOARD_URL"; then
+    break
+  fi
+  sleep 2
+done
+exec flatpak run org.chromium.Chromium \\
+  --kiosk --noerrdialogs --disable-translate --no-first-run \\
+  --disable-infobars --disable-features=TranslateUI \\
+  --check-for-update-interval=31536000 \\
+  "$DASHBOARD_URL"
+EOF
+    chmod +x "$OPERATOR_HOME/.local/bin/dashboard-kiosk.sh"
+    cat > "$OPERATOR_HOME/.config/autostart/dashboard-kiosk.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Dashboard Kiosk
+Exec=$OPERATOR_HOME/.local/bin/dashboard-kiosk.sh
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=10
+EOF
+    chown "$OPERATOR_USER:$OPERATOR_USER" \
+        "$OPERATOR_HOME/.local/bin/dashboard-kiosk.sh" \
+        "$OPERATOR_HOME/.config/autostart/dashboard-kiosk.desktop"
+    echo "[4/6] Chromium-Kiosk-Autostart: $DASHBOARD_URL"
+else
+    echo "[4/6] Kiosk uebersprungen (--dashboard nicht gesetzt)"
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# 5. Manuelle Schritte (nicht headless machbar)
+# ─────────────────────────────────────────────────────────────────
+cat <<EOF
+[5/6] MANUELL erledigen (einmalig, an der GUI):
+  a) gnome-keyring auf Empty-Passphrase: seahorse -> Login-Keyring ->
+     Passwort aendern -> alt: Linux-PW, neu: LEER.
+     (Auto-Login laesst den Keyring sonst dauerhaft locked — libsecret-Apps
+      lesen leer; Learning 2026-05-21-auto-login-locks-gnome-keyring)
+  b) RustDesk-Identitaet:
+     - Restore vom Backup: ~/.config/rustdesk/ zurueckspielen, dann
+       'sudo mkdir -p /root/.config/rustdesk && sudo cp ~/.config/rustdesk/RustDesk.toml \\
+        ~/.config/rustdesk/RustDesk2.toml /root/.config/rustdesk/ && sudo systemctl restart rustdesk'
+     - ODER Neu-Setup: RustDesk-GUI oeffnen, permanentes Passwort setzen,
+       Server-Config eintragen.
+  c) RustDesk-Erstfreigabe: einmal vom Client verbinden -> GNOME-Dialog ->
+     Monitor waehlen -> MERKEN-Regler AN -> bestaetigen (reboot-fest ab dann).
+     Details: Vault-Pattern 2026-07-13-rustdesk-unattended-gnome-wayland-service-mode
+EOF
+
+# ─────────────────────────────────────────────────────────────────
+# 6. Reboot-Drill-Checkliste
+# ─────────────────────────────────────────────────────────────────
+cat <<'EOF'
+[6/6] Nach 'systemctl reboot' pruefen (Reboot-Drill):
+  systemctl is-enabled docker.service      -> enabled
+  systemctl is-enabled tailscaled          -> enabled
+  systemctl is-active  rustdesk.service    -> active
+  systemctl is-enabled gnome-remote-desktop.service -> masked (erwartet!)
+  tailscale status --peers=false           -> eigene IP gelistet
+  loginctl list-sessions                   -> NUR Operator-Session (keine gdm-greeter-Zeile)
+  docker ps                                -> Workload-Container 'Up' (nach Compose-Deploy)
+  Optional Auto-Reboot aktivieren:  reboot-schedule on  (+ 'every 7' / 'at 03:00')
+EOF

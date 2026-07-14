@@ -1,0 +1,6 @@
+[Unit]
+Description=Scheduled system reboot (apply staged bootc/Bluefin updates)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/reboot-schedule-check

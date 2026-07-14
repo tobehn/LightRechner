@@ -1,0 +1,11 @@
+[Unit]
+Description=Trigger scheduled reboot check every night
+
+[Timer]
+OnCalendar=*-*-* 23:59:59
+AccuracySec=1s
+# Persistent=false: verpasste Trigger NICHT nachholen (sonst Reboot-Schleife beim Boot)
+Persistent=false
+
+[Install]
+WantedBy=timers.target

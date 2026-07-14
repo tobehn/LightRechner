@@ -1,0 +1,11 @@
+# LightRechner: enable-Zustand muss die Preset-Neuberechnung beim Boot ueberleben.
+# Ohne Preset-Regel kassiert der Boot einen nackten enable-Symlink wieder ein
+# (Learning 2026-07-13: bootc-image-enable-needs-preset). Das bluefin-dx
+# Vendor-Preset deckt nur docker.socket, NICHT docker.service (Reboot-Lockout,
+# Learning 2026-05-21).
+enable docker.service
+enable tailscaled.service
+enable rustdesk.service
+# Auto-Reboot ist Opt-in pro Site: `reboot-schedule on` setzt einen
+# /etc-Override, der dieses Image-Default schlaegt (3-way-/etc-Merge).
+disable nightly-reboot.timer
