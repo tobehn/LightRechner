@@ -98,6 +98,16 @@ if [ -n "$DASHBOARD_URL" ]; then
     cat > "$OPERATOR_HOME/.local/bin/dashboard-kiosk.sh" <<EOF
 #!/bin/bash
 # Wartet auf Dashboard-Ready (Compose-Stack braucht nach Boot etwas), dann Kiosk.
+#
+# --disable-gpu-compositing ist PFLICHT, nicht Kosmetik: als alleiniges
+# Fullscreen-Fenster mit GPU-Buffer geht mutter in Direct Scanout und
+# komponiert die Stage nicht mehr — der PipeWire-ScreenCast und damit jede
+# RustDesk-/RDP-Fernwartung bekommt dann NULL Frames. Der Operator sieht ein
+# Standbild (den letzten gelieferten Frame), nicht ein haengendes Dashboard.
+# Gemessen am Leitrechner UHV21 2026-07-20: 24 B/s (reines TCP-Keepalive) mit
+# GPU-Buffer vs. 0,9-150 kB/s ohne. Upstream prueft die Scanout-Entscheidung
+# nicht auf laufende Screen-Casts (mutter#3903, in 50.2/50.3 nicht gefixt).
+# Kosten: Software-Compositing, gemessen 8,1 % CPU auf i7-14700.
 for i in \$(seq 1 150); do
   if curl -sf -o /dev/null --max-time 2 "$DASHBOARD_URL"; then
     break
@@ -105,7 +115,8 @@ for i in \$(seq 1 150); do
   sleep 2
 done
 exec flatpak run org.chromium.Chromium \\
-  --kiosk --noerrdialogs --disable-translate --no-first-run \\
+  --kiosk --disable-gpu-compositing \\
+  --noerrdialogs --disable-translate --no-first-run \\
   --disable-infobars --disable-features=TranslateUI \\
   --check-for-update-interval=31536000 \\
   "$DASHBOARD_URL"
