@@ -27,7 +27,11 @@ Secrets sind **nie** Teil des Images (public GHCR).
   Hardware-Watchdog (60s) + Panic-Auto-Reboot
 - `reboot-schedule`-CLI für geplante Update-Reboots (**Opt-in**: `reboot-schedule on`,
   Intervall z.B. `every 7`, Uhrzeit `at 03:00`)
-- Chromium als deklaratives Flatpak (Kiosk-Browser, installiert beim ersten Boot mit Netz)
+- Chromium als deklaratives Flatpak (Kiosk-Browser, installiert beim ersten Boot mit Netz);
+  der provisionierte Kiosk läuft mit `--disable-gpu-compositing` — **nicht entfernen**:
+  als alleiniges Fullscreen-Fenster mit GPU-Buffer geht mutter in Direct Scanout und
+  liefert dem ScreenCast keine Frames mehr, die RustDesk-Fernwartung zeigt dann nur noch
+  ein Standbild (mutter#3903; gemessen: 24 B/s Keepalive statt 0,9–150 kB/s)
 
 ## Neuen Leitrechner aufsetzen
 
